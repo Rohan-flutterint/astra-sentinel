@@ -1,5 +1,6 @@
 mod app;
 mod engine;
+mod feeds;
 mod signatures;
 mod yara;
 

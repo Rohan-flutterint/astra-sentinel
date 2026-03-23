@@ -8,6 +8,7 @@
 - Result filtering and search for large scans
 - JSON report export
 - Operator-controlled scan stop/cancellation
+- Curated threat-feed sync for YARA rules
 - Local signature database management from the desktop UI
 
 The project started as a Go CLI and is now a native Rust desktop application built for a cleaner operator workflow.
@@ -36,6 +37,7 @@ The project started as a Go CLI and is now a native Rust desktop application bui
 - Result filtering and search for large file sets
 - JSON report export for offline review or handoff
 - Scan policy controls for hidden paths and file size limits
+- Curated threat-feed sync from central public YARA repositories
 - In-app signature insertion for known-bad hashes
 
 ## Detection Model
@@ -60,6 +62,23 @@ The app reports:
 - Namespace derived from the rule filename
 - Tags when present
 - Matched strings and offsets
+
+## Threat Feeds
+
+`Astra Sentinel` now supports curated YARA feed sync into `feeds/rules/`.
+
+The product-oriented approach is:
+
+- Sync trusted public YARA repositories
+- Stage them in a managed local feed directory
+- Use the synced feed directory as the scanner's YARA rules path
+
+Current curated sources:
+
+- [Yara-Rules](https://github.com/Yara-Rules/rules)
+- [Neo23x0/signature-base](https://github.com/Neo23x0/signature-base)
+
+This is intentionally safer than blindly appending bulk public hash feeds into the local signature database, which often increases noise and false positives faster than it improves detection quality.
 
 ## Requirements
 
@@ -127,6 +146,7 @@ astra-sentinel/
 8. Stop the scan at any time if needed.
 9. Review verdicts in the results panel, use search/filter controls for large scans, and inspect evidence in the detail panel.
 10. Export a JSON report when you need to archive or share the scan output.
+11. Use `Threat Feeds` to sync curated YARA repositories into the managed feed directory.
 
 To add a signature:
 

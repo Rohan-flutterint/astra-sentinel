@@ -18,6 +18,7 @@ use serde::Serialize;
 use crate::engine::{
     run_scan, ScanEvent, ScanPolicy, ScanRequest, ScanResult, ScanSummary, ScanTarget, Verdict,
 };
+use crate::feeds::{self, FeedSyncSummary};
 use crate::signatures::{add_signature, HashAlgorithm};
 
 const VERSION: &str = "0.3.0";
@@ -58,6 +59,11 @@ struct ScanProgress {
     rule_files: usize,
 }
 
+enum FeedSyncEvent {
+    Completed(FeedSyncSummary),
+    Failed(String),
+}
+
 pub struct AstraApp {
     target_mode: TargetMode,
     target_path: String,
@@ -73,9 +79,13 @@ pub struct AstraApp {
     summary: Option<ScanSummary>,
     progress: ScanProgress,
     scan_events: Option<Receiver<ScanEvent>>,
+    feed_sync_events: Option<Receiver<FeedSyncEvent>>,
     cancel_flag: Option<Arc<AtomicBool>>,
     is_scanning: bool,
+    is_syncing_feeds: bool,
     status_message: String,
+    feed_status_message: String,
+    feed_summary: Option<FeedSyncSummary>,
     add_hash_value: String,
     add_hash_type: HashAlgorithm,
     add_threat_name: String,
@@ -87,7 +97,9 @@ impl AstraApp {
 
         let database_path = default_data_path("signatures/hashes.txt")
             .unwrap_or_else(|| PathBuf::from("signatures/hashes.txt"));
-        let rules_path = default_data_path("rules").unwrap_or_else(|| PathBuf::from("rules"));
+        let rules_path = default_data_path("feeds/rules")
+            .or_else(|| default_data_path("rules"))
+            .unwrap_or_else(|| PathBuf::from("rules"));
 
         Self {
             target_mode: TargetMode::File,
@@ -104,9 +116,13 @@ impl AstraApp {
             summary: None,
             progress: ScanProgress::default(),
             scan_events: None,
+            feed_sync_events: None,
             cancel_flag: None,
             is_scanning: false,
+            is_syncing_feeds: false,
             status_message: "Workspace armed. Select a target to begin.".to_string(),
+            feed_status_message: "Curated feeds not synced yet.".to_string(),
+            feed_summary: None,
             add_hash_value: String::new(),
             add_hash_type: HashAlgorithm::Sha256,
             add_threat_name: String::new(),
@@ -172,6 +188,22 @@ impl AstraApp {
         }
     }
 
+    fn sync_curated_feeds(&mut self) {
+        let (sender, receiver) = mpsc::channel();
+        self.feed_sync_events = Some(receiver);
+        self.is_syncing_feeds = true;
+        self.feed_status_message = "Syncing curated threat feeds...".to_string();
+
+        thread::spawn(move || {
+            let result = feeds::sync_curated_feeds(&feeds::default_feed_rules_dir());
+            let event = match result {
+                Ok(summary) => FeedSyncEvent::Completed(summary),
+                Err(error) => FeedSyncEvent::Failed(error.to_string()),
+            };
+            let _ = sender.send(event);
+        });
+    }
+
     fn poll_scan_events(&mut self) {
         let mut disconnect = false;
 
@@ -227,6 +259,35 @@ impl AstraApp {
         if disconnect {
             self.scan_events = None;
             self.cancel_flag = None;
+        }
+
+        let mut feed_disconnect = false;
+        if let Some(receiver) = &self.feed_sync_events {
+            while let Ok(event) = receiver.try_recv() {
+                match event {
+                    FeedSyncEvent::Completed(summary) => {
+                        self.enable_yara = true;
+                        self.rules_path = summary.destination.display().to_string();
+                        self.feed_status_message = format!(
+                            "Synced {} feeds and {} rules into {}.",
+                            summary.synced_feeds,
+                            summary.total_rules,
+                            summary.destination.display()
+                        );
+                        self.feed_summary = Some(summary);
+                        self.is_syncing_feeds = false;
+                        feed_disconnect = true;
+                    }
+                    FeedSyncEvent::Failed(message) => {
+                        self.feed_status_message = message;
+                        self.is_syncing_feeds = false;
+                        feed_disconnect = true;
+                    }
+                }
+            }
+        }
+        if feed_disconnect {
+            self.feed_sync_events = None;
         }
     }
 
@@ -774,6 +835,64 @@ fn render_sidebar(ui: &mut egui::Ui, app: &mut AstraApp) {
                             app.status_message = "Results cleared. Workspace is ready.".to_string();
                         }
                     });
+                },
+            );
+
+            ui.add_space(14.0);
+
+            card(
+                ui,
+                "Threat Feeds",
+                "Curated central repositories for expanding YARA coverage safely.",
+                |ui| {
+                    for feed in feeds::curated_feeds() {
+                        info_strip(ui, feed.name, feed.description);
+                        ui.label(
+                            RichText::new(feed.source_url)
+                                .size(11.0)
+                                .color(MUTED),
+                        );
+                    }
+
+                    ui.add_space(8.0);
+                    let sync = secondary_button_enabled(
+                        ui,
+                        "Sync Curated Feeds",
+                        !app.is_syncing_feeds,
+                        ui.available_width(),
+                        40.0,
+                    );
+                    if sync.clicked() {
+                        app.sync_curated_feeds();
+                    }
+
+                    ui.add_space(8.0);
+                    ui.label(
+                        RichText::new(&app.feed_status_message)
+                            .size(13.0)
+                            .color(MUTED),
+                    );
+
+                    if let Some(summary) = &app.feed_summary {
+                        ui.add_space(8.0);
+                        info_strip(
+                            ui,
+                            "Active Feed Rules",
+                            &format!(
+                                "{} feeds | {} rules | {}",
+                                summary.synced_feeds,
+                                summary.total_rules,
+                                truncate_middle(&summary.destination.display().to_string(), 34)
+                            ),
+                        );
+                        for feed_status in &summary.per_feed {
+                            info_strip(
+                                ui,
+                                feed_status.feed.name,
+                                &format!("{} rules imported", feed_status.rule_count),
+                            );
+                        }
+                    }
                 },
             );
 
