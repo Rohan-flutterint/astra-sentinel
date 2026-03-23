@@ -9,8 +9,8 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use eframe::egui::epaint::Shadow;
 use eframe::egui::{
-    self, vec2, Align, Color32, FontFamily, FontId, Layout, RichText, Rounding, Stroke, TextEdit,
-    Vec2,
+    self, pos2, vec2, Align, Color32, FontFamily, FontId, Layout, Rect, RichText, Rounding, Sense,
+    Stroke, TextEdit, Vec2,
 };
 use rfd::FileDialog;
 use serde::Serialize;
@@ -62,6 +62,14 @@ struct ScanProgress {
 enum FeedSyncEvent {
     Completed(FeedSyncSummary),
     Failed(String),
+}
+
+#[derive(Clone, Copy)]
+enum MetricIcon {
+    Processed,
+    HashDetections,
+    YaraDetections,
+    Elapsed,
 }
 
 pub struct AstraApp {
@@ -847,11 +855,7 @@ fn render_sidebar(ui: &mut egui::Ui, app: &mut AstraApp) {
                 |ui| {
                     for feed in feeds::curated_feeds() {
                         info_strip(ui, feed.name, feed.description);
-                        ui.label(
-                            RichText::new(feed.source_url)
-                                .size(11.0)
-                                .color(MUTED),
-                        );
+                        ui.label(RichText::new(feed.source_url).size(11.0).color(MUTED));
                     }
 
                     ui.add_space(8.0);
@@ -1017,9 +1021,16 @@ fn render_dashboard(ui: &mut egui::Ui, app: &mut AstraApp) {
     render_summary_row(ui, app.summary.as_ref(), &app.progress);
     ui.add_space(16.0);
     let filtered_indices = app.filtered_result_indices();
+    let total_width = ui.available_width();
+    let panel_gap = 16.0;
+    let mut left_width = (total_width * 0.42).clamp(340.0, 520.0);
+    let min_detail_width = 420.0;
+    if total_width - left_width - panel_gap < min_detail_width {
+        left_width = (total_width - panel_gap - min_detail_width).max(300.0);
+    }
+    let detail_width = (total_width - left_width - panel_gap).max(320.0);
 
     ui.horizontal_top(|ui| {
-        let left_width = (ui.available_width() * 0.42).max(360.0);
         ui.allocate_ui_with_layout(
             Vec2::new(left_width, ui.available_height()),
             Layout::top_down(Align::Min),
@@ -1036,7 +1047,7 @@ fn render_dashboard(ui: &mut egui::Ui, app: &mut AstraApp) {
         );
         ui.add_space(16.0);
         ui.allocate_ui_with_layout(
-            Vec2::new(ui.available_width(), ui.available_height()),
+            Vec2::new(detail_width, ui.available_height()),
             Layout::top_down(Align::Min),
             |ui| render_detail_panel(ui, &app.results, app.selected_result),
         );
@@ -1044,40 +1055,82 @@ fn render_dashboard(ui: &mut egui::Ui, app: &mut AstraApp) {
 }
 
 fn render_summary_row(ui: &mut egui::Ui, summary: Option<&ScanSummary>, progress: &ScanProgress) {
-    ui.horizontal(|ui| {
-        metric_card(
-            ui,
-            "Processed",
-            summary
-                .map(|value| value.files_scanned.to_string())
-                .unwrap_or_else(|| progress.completed.to_string()),
-            TEXT,
-        );
-        metric_card(
-            ui,
-            "Hash Detections",
-            summary
-                .map(|value| value.hash_detections.to_string())
-                .unwrap_or_else(|| "0".to_string()),
-            DANGER,
-        );
-        metric_card(
-            ui,
-            "YARA Detections",
-            summary
-                .map(|value| value.yara_detections.to_string())
-                .unwrap_or_else(|| "0".to_string()),
-            WARNING,
-        );
-        metric_card(
-            ui,
-            "Elapsed",
-            summary
-                .map(|value| format_duration(value.elapsed))
-                .unwrap_or_else(|| "--".to_string()),
-            ACCENT,
-        );
-    });
+    let tile_gap = 12.0;
+
+    egui::Frame::none()
+        .fill(Color32::from_rgb(14, 21, 31))
+        .stroke(Stroke::new(1.0, STROKE))
+        .rounding(Rounding::same(24.0))
+        .shadow(card_shadow(42))
+        .inner_margin(egui::Margin::same(12.0))
+        .show(ui, |ui| {
+            let tile_width = ((ui.available_width() - tile_gap * 3.0) / 4.0).max(140.0);
+
+            ui.horizontal_top(|ui| {
+                ui.spacing_mut().item_spacing.x = tile_gap;
+
+                ui.allocate_ui_with_layout(
+                    vec2(tile_width, 80.0),
+                    Layout::top_down(Align::Min),
+                    |ui| {
+                        metric_card(
+                            ui,
+                            MetricIcon::Processed,
+                            "Processed",
+                            summary
+                                .map(|value| value.files_scanned.to_string())
+                                .unwrap_or_else(|| progress.completed.to_string()),
+                            TEXT,
+                        );
+                    },
+                );
+                ui.allocate_ui_with_layout(
+                    vec2(tile_width, 80.0),
+                    Layout::top_down(Align::Min),
+                    |ui| {
+                        metric_card(
+                            ui,
+                            MetricIcon::HashDetections,
+                            "Hash Detections",
+                            summary
+                                .map(|value| value.hash_detections.to_string())
+                                .unwrap_or_else(|| "0".to_string()),
+                            DANGER,
+                        );
+                    },
+                );
+                ui.allocate_ui_with_layout(
+                    vec2(tile_width, 80.0),
+                    Layout::top_down(Align::Min),
+                    |ui| {
+                        metric_card(
+                            ui,
+                            MetricIcon::YaraDetections,
+                            "YARA Detections",
+                            summary
+                                .map(|value| value.yara_detections.to_string())
+                                .unwrap_or_else(|| "0".to_string()),
+                            WARNING,
+                        );
+                    },
+                );
+                ui.allocate_ui_with_layout(
+                    vec2(tile_width, 80.0),
+                    Layout::top_down(Align::Min),
+                    |ui| {
+                        metric_card(
+                            ui,
+                            MetricIcon::Elapsed,
+                            "Elapsed",
+                            summary
+                                .map(|value| format_duration(value.elapsed))
+                                .unwrap_or_else(|| "--".to_string()),
+                            ACCENT,
+                        );
+                    },
+                );
+            });
+        });
 }
 
 fn render_results_panel(
@@ -1259,22 +1312,153 @@ fn render_summary_row_spacer(ui: &mut egui::Ui) {
     ui.add_space(0.0);
 }
 
-fn metric_card(ui: &mut egui::Ui, label: &str, value: String, accent: Color32) {
+fn metric_card(ui: &mut egui::Ui, icon: MetricIcon, label: &str, value: String, accent: Color32) {
     egui::Frame::none()
         .fill(SURFACE)
         .stroke(Stroke::new(1.0, STROKE))
         .rounding(Rounding::same(22.0))
         .shadow(card_shadow(55))
-        .inner_margin(egui::Margin::same(18.0))
+        .inner_margin(egui::Margin::symmetric(14.0, 12.0))
         .show(ui, |ui| {
-            ui.set_min_width(170.0);
-            ui.horizontal(|ui| {
-                ui.colored_label(accent, RichText::new("●").size(14.0));
-                ui.label(RichText::new(label).size(13.0).color(MUTED));
-            });
-            ui.add_space(10.0);
-            ui.label(RichText::new(value).size(30.0).strong().color(TEXT));
+            ui.set_min_size(vec2(ui.available_width(), 76.0));
+            ui.allocate_ui_with_layout(
+                vec2(ui.available_width(), 52.0),
+                Layout::left_to_right(Align::Center),
+                |ui| {
+                    ui.spacing_mut().item_spacing.x = 10.0;
+
+                    let value_width = if matches!(icon, MetricIcon::Elapsed) {
+                        72.0
+                    } else {
+                        48.0
+                    };
+                    let label_width = (ui.available_width() - value_width).max(72.0);
+
+                    ui.allocate_ui_with_layout(
+                        vec2(label_width, 52.0),
+                        Layout::left_to_right(Align::Center),
+                        |ui| {
+                            draw_metric_icon(ui, icon, accent);
+                            ui.label(RichText::new(label).size(11.5).color(MUTED));
+                        },
+                    );
+
+                    ui.allocate_ui_with_layout(
+                        vec2(value_width, 52.0),
+                        Layout::right_to_left(Align::Center),
+                        |ui| {
+                            ui.label(RichText::new(value).size(22.0).strong().color(TEXT));
+                        },
+                    );
+                },
+            );
         });
+}
+
+fn draw_metric_icon(ui: &mut egui::Ui, icon: MetricIcon, accent: Color32) {
+    let (icon_rect, _) = ui.allocate_exact_size(vec2(24.0, 24.0), Sense::hover());
+    let painter = ui.painter_at(icon_rect);
+    painter.rect_filled(icon_rect, 9.0, accent.linear_multiply(0.14));
+
+    let glyph_rect = icon_rect.shrink2(vec2(5.5, 5.5));
+    let stroke = Stroke::new(1.7, accent);
+
+    match icon {
+        MetricIcon::Processed => draw_processed_icon(&painter, glyph_rect, stroke),
+        MetricIcon::HashDetections => draw_hash_icon(&painter, glyph_rect, stroke),
+        MetricIcon::YaraDetections => draw_yara_icon(&painter, glyph_rect, stroke),
+        MetricIcon::Elapsed => draw_elapsed_icon(&painter, glyph_rect, stroke),
+    }
+}
+
+fn draw_processed_icon(painter: &egui::Painter, rect: Rect, stroke: Stroke) {
+    let left = rect.left();
+    let right = rect.right();
+    let top = rect.top();
+    let bottom = rect.bottom();
+    let fold = rect.width() * 0.26;
+
+    let points = vec![
+        pos2(left, top),
+        pos2(right - fold, top),
+        pos2(right, top + fold),
+        pos2(right, bottom),
+        pos2(left, bottom),
+        pos2(left, top),
+    ];
+
+    for segment in points.windows(2) {
+        painter.line_segment([segment[0], segment[1]], stroke);
+    }
+
+    painter.line_segment(
+        [pos2(right - fold, top), pos2(right - fold, top + fold)],
+        stroke,
+    );
+    painter.line_segment(
+        [pos2(right - fold, top + fold), pos2(right, top + fold)],
+        stroke,
+    );
+}
+
+fn draw_hash_icon(painter: &egui::Painter, rect: Rect, stroke: Stroke) {
+    let left_x = rect.left() + rect.width() * 0.32;
+    let right_x = rect.left() + rect.width() * 0.62;
+    let top_y = rect.top() + rect.height() * 0.18;
+    let bottom_y = rect.bottom() - rect.height() * 0.18;
+
+    painter.line_segment([pos2(left_x, top_y), pos2(left_x - 1.5, bottom_y)], stroke);
+    painter.line_segment(
+        [pos2(right_x, top_y), pos2(right_x - 1.5, bottom_y)],
+        stroke,
+    );
+
+    let upper_y = rect.top() + rect.height() * 0.40;
+    let lower_y = rect.top() + rect.height() * 0.67;
+    let left = rect.left() + rect.width() * 0.14;
+    let right = rect.right() - rect.width() * 0.12;
+
+    painter.line_segment([pos2(left, upper_y), pos2(right, upper_y - 1.0)], stroke);
+    painter.line_segment([pos2(left, lower_y), pos2(right, lower_y - 1.0)], stroke);
+}
+
+fn draw_yara_icon(painter: &egui::Painter, rect: Rect, stroke: Stroke) {
+    let center = rect.center();
+    let outer_radius = rect.width().min(rect.height()) * 0.42;
+    let inner_radius = outer_radius * 0.45;
+
+    painter.circle_stroke(center, outer_radius, stroke);
+    painter.circle_stroke(center, inner_radius, stroke);
+    painter.line_segment(
+        [pos2(rect.left(), center.y), pos2(rect.right(), center.y)],
+        stroke,
+    );
+    painter.line_segment(
+        [pos2(center.x, rect.top()), pos2(center.x, rect.bottom())],
+        stroke,
+    );
+}
+
+fn draw_elapsed_icon(painter: &egui::Painter, rect: Rect, stroke: Stroke) {
+    let center = rect.center();
+    let radius = rect.width().min(rect.height()) * 0.42;
+
+    painter.circle_stroke(center, radius, stroke);
+    painter.line_segment(
+        [center, pos2(center.x, rect.top() + rect.height() * 0.25)],
+        stroke,
+    );
+    painter.line_segment(
+        [
+            center,
+            pos2(
+                rect.left() + rect.width() * 0.68,
+                center.y + rect.height() * 0.10,
+            ),
+        ],
+        stroke,
+    );
+    painter.circle_filled(center, 1.8, stroke.color);
 }
 
 fn card(ui: &mut egui::Ui, title: &str, subtitle: &str, add_contents: impl FnOnce(&mut egui::Ui)) {
