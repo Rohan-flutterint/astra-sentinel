@@ -1325,14 +1325,18 @@ fn metric_card(ui: &mut egui::Ui, icon: MetricIcon, label: &str, value: String, 
                 vec2(ui.available_width(), 52.0),
                 Layout::left_to_right(Align::Center),
                 |ui| {
-                    ui.spacing_mut().item_spacing.x = 10.0;
+                    let lane_gap = 10.0;
+                    ui.spacing_mut().item_spacing.x = lane_gap;
 
-                    let value_width = if matches!(icon, MetricIcon::Elapsed) {
-                        72.0
-                    } else {
-                        48.0
+                    let base_value_width = match icon {
+                        MetricIcon::Processed => 86.0,
+                        MetricIcon::Elapsed => 72.0,
+                        MetricIcon::HashDetections | MetricIcon::YaraDetections => 56.0,
                     };
-                    let label_width = (ui.available_width() - value_width).max(72.0);
+                    let value_width = (base_value_width
+                        + (value.len().saturating_sub(2) as f32 * 7.0))
+                        .min(110.0);
+                    let label_width = (ui.available_width() - value_width - lane_gap).max(72.0);
 
                     ui.allocate_ui_with_layout(
                         vec2(label_width, 52.0),
@@ -1347,7 +1351,7 @@ fn metric_card(ui: &mut egui::Ui, icon: MetricIcon, label: &str, value: String, 
                         vec2(value_width, 52.0),
                         Layout::right_to_left(Align::Center),
                         |ui| {
-                            ui.label(RichText::new(value).size(22.0).strong().color(TEXT));
+                            ui.label(RichText::new(value).size(21.0).strong().color(TEXT));
                         },
                     );
                 },
